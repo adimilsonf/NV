@@ -47,6 +47,7 @@ const dataHora = `${formatter.format(new Date())} (Horário SP)`;
     });
 
     const page = await browser.newPage();
+    await page.emulateTimezone("America/Sao_Paulo"); // 👈 garante TZ dentro do HTML
     await page.setContent(html, { waitUntil: "networkidle0" });
 
     // 🔹 Gera PDF em memória
@@ -71,4 +72,5 @@ const dataHora = `${formatter.format(new Date())} (Horário SP)`;
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Servidor rodando em http://localhost:${PORT}/gerar-pdf?cnpj=04486026000142`));
+
 
