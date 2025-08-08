@@ -22,7 +22,15 @@ app.get("/gerar-pdf", async (req, res) => {
     if (!fantasia || fantasia.trim().toLowerCase() === "não encontrado") {
       fantasia = razao;
     }
-    const dataHora = new Date().toLocaleString("pt-BR");
+    const formatter = new Intl.DateTimeFormat("pt-BR", {
+  timeZone: "America/Sao_Paulo",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit"
+});
+const dataHora = `${formatter.format(new Date())} (Horário SP)`;
 
     // 🔹 Lê template HTML
     let html = fs.readFileSync("template.html", "utf8");
@@ -63,3 +71,4 @@ app.get("/gerar-pdf", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Servidor rodando em http://localhost:${PORT}/gerar-pdf?cnpj=04486026000142`));
+
