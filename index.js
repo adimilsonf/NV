@@ -1,6 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const axios = require("axios");
+const path = require("path");
 const chromium = require("@sparticuz/chromium");
 const puppeteer = require("puppeteer-core");
 
@@ -10,16 +11,28 @@ const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT || "2", 10);
 let browserPromise = null;
 let executablePathCache = null;
 
-// PRE-WARM: extração do chromium para /tmp no boot
+// (opcional) logs úteis pra entender se o pacote veio completo
+function logChromiumBinPresence() {
+  try {
+    const pkgRoot = path.dirname(require.resolve("@sparticuz/chromium/package.json"));
+    const binDir = path.join(pkgRoot, "bin");
+    console.log("[chromium] bin exists?", fs.existsSync(binDir), "at:", binDir);
+  } catch (e) {
+    console.log("[chromium] cannot resolve package root:", e.message);
+  }
+}
+
+// Pré-aquecimento: força o @sparticuz/chromium a extrair o binário para /tmp
 async function prewarmChromium() {
-  executablePathCache = await chromium.executablePath; // força download/extração
-  if (!executablePathCache) throw new Error("Chromium executablePath não resolvido");
-  console.log("[chromium] pronto em:", executablePathCache);
+  logChromiumBinPresence();
+  executablePathCache = await chromium.executablePath;
+  if (!executablePathCache) throw new Error("chromium.executablePath vazio");
+  console.log("[chromium] executablePath:", executablePathCache);
 }
 
 async function getBrowser() {
   if (!browserPromise) {
-    const path = executablePathCache || (await chromium.executablePath);
+    const pathToExe = executablePathCache || (await chromium.executablePath);
     browserPromise = puppeteer.launch({
       args: [
         ...chromium.args,
@@ -29,14 +42,14 @@ async function getBrowser() {
         "--single-process"
       ],
       defaultViewport: chromium.defaultViewport,
-      executablePath: path,
+      executablePath: pathToExe,
       headless: true
     });
   }
   return browserPromise;
 }
 
-// Semáforo simples pra limitar concorrência
+// semáforo simples pra limitar concorrência
 let inFlight = 0;
 const queue = [];
 function acquire() {
@@ -70,13 +83,13 @@ app.get("/gerar-pdf", async (req, res) => {
   const release = await acquire();
   let page;
   try {
-    // 1) Dados do CNPJ
+    // 1) BrasilAPI
     const { data } = await axios.get(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { timeout: 20000 });
     const razao = data.razao_social || "Não encontrado";
     let fantasia = (data.nome_fantasia || "").trim();
     if (!fantasia || fantasia.toLowerCase() === "não encontrado") fantasia = razao;
 
-    // 2) Data/Hora SP
+    // 2) Data/Hora SP (server-side)
     const formatter = new Intl.DateTimeFormat("pt-BR", {
       timeZone: "America/Sao_Paulo",
       year: "numeric",
@@ -97,7 +110,6 @@ app.get("/gerar-pdf", async (req, res) => {
     // 4) Render
     const browser = await getBrowser();
     page = await browser.newPage();
-
     try { await page.emulateTimezone("America/Sao_Paulo"); } catch {}
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 45000 });
 
@@ -121,7 +133,7 @@ app.get("/gerar-pdf", async (req, res) => {
 
 app.get("/health", (_req, res) => res.send("ok"));
 
-// Sobe servidor só depois do pre-warm
+// sobe servidor só após pre-warm
 prewarmChromium()
   .then(() => {
     app.listen(PORT, () => {
@@ -133,7 +145,7 @@ prewarmChromium()
     process.exit(1);
   });
 
-// Encerramento gracioso
+// encerramento gracioso
 process.on("SIGTERM", async () => {
   if (browserPromise) {
     try { (await browserPromise).close(); } catch {}
