@@ -11,7 +11,7 @@ const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT || "2", 10);
 let browserPromise = null;
 let executablePathCache = null;
 
-// (opcional) logs úteis pra entender se o pacote veio completo
+// (opcional) logs úteis
 function logChromiumBinPresence() {
   try {
     const pkgRoot = path.dirname(require.resolve("@sparticuz/chromium/package.json"));
@@ -22,34 +22,34 @@ function logChromiumBinPresence() {
   }
 }
 
-// Pré-aquecimento: força o @sparticuz/chromium a extrair o binário para /tmp
+// Pré-aquece: força extração para /tmp/chromium
 async function prewarmChromium() {
   logChromiumBinPresence();
-  executablePathCache = await chromium.executablePath;
-  if (!executablePathCache) throw new Error("chromium.executablePath vazio");
+  executablePathCache = await chromium.executablePath(); // <-- () AQUI
+  if (!executablePathCache) throw new Error("chromium.executablePath() retornou vazio");
   console.log("[chromium] executablePath:", executablePathCache);
 }
 
 async function getBrowser() {
   if (!browserPromise) {
-    const pathToExe = executablePathCache || (await chromium.executablePath);
+    const pathToExe = executablePathCache || (await chromium.executablePath()); // <-- () AQUI
     browserPromise = puppeteer.launch({
       args: [
         ...chromium.args,
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--single-process"
+        "--single-process",
       ],
       defaultViewport: chromium.defaultViewport,
       executablePath: pathToExe,
-      headless: true
+      headless: true,
     });
   }
   return browserPromise;
 }
 
-// semáforo simples pra limitar concorrência
+// Semáforo simples p/ limitar concorrência
 let inFlight = 0;
 const queue = [];
 function acquire() {
@@ -96,7 +96,7 @@ app.get("/gerar-pdf", async (req, res) => {
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",
-      minute: "2-digit"
+      minute: "2-digit",
     });
     const dataHora = `${formatter.format(new Date())} (Horário SP)`;
 
@@ -118,10 +118,9 @@ app.get("/gerar-pdf", async (req, res) => {
     const fileName = `Proposta Comercial PagBank - ${razao}.pdf`.replace(/[\\/:*?"<>|]/g, "");
     res.set({
       "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="${fileName}"`
+      "Content-Disposition": `attachment; filename="${fileName}"`,
     });
     res.send(pdfBuffer);
-
   } catch (err) {
     console.error("❌ Erro ao gerar PDF:", err?.response?.data || err.message);
     res.status(500).send("Erro ao gerar o PDF.");
@@ -133,7 +132,6 @@ app.get("/gerar-pdf", async (req, res) => {
 
 app.get("/health", (_req, res) => res.send("ok"));
 
-// sobe servidor só após pre-warm
 prewarmChromium()
   .then(() => {
     app.listen(PORT, () => {
@@ -145,7 +143,6 @@ prewarmChromium()
     process.exit(1);
   });
 
-// encerramento gracioso
 process.on("SIGTERM", async () => {
   if (browserPromise) {
     try { (await browserPromise).close(); } catch {}
