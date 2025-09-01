@@ -1,0 +1,7 @@
+[build]
+builder = "NIXPACKS"
+NIXPACKS_BUILD_CMD = "npm install --omit=dev"
+
+[deploy]
+startCommand = "node index.js"
+port = 3000
