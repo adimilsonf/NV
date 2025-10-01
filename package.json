@@ -1,16 +1,16 @@
 {
   "name": "editpdf",
   "version": "1.0.0",
-  "main": "server.js",
+  "main": "index.js",
   "type": "commonjs",
   "engines": { "node": ">=18 <21" },
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@sparticuz/chromium": "^130.0.0",
-    "axios": "^1.11.0",
-    "express": "^4.19.2",
-    "puppeteer-core": "^22.15.0"
+    "@sparticuz/chromium": "130.0.0",
+    "axios": "1.11.0",
+    "express": "4.21.2",
+    "puppeteer-core": "24.15.0"
   }
 }
