@@ -1,7 +1,31 @@
 [build]
 builder = "NIXPACKS"
-NIXPACKS_BUILD_CMD = "npm install --omit=dev"
 NIXPACKS_NODE_VERSION = "20"
+NIXPACKS_BUILD_CMD = "npm install --omit=dev"
+
+# Fontes e libs necessárias para renderizar PDFs corretamente
+NIXPACKS_PKGS = """
+libnss3
+libxss1
+libasound2
+libatk1.0-0
+libatk-bridge2.0-0
+libx11-6
+libx11-xcb1
+libxcomposite1
+libxdamage1
+libxext6
+libxfixes3
+libxrandr2
+libgbm1
+libpangocairo-1.0-0
+libpango-1.0-0
+libgtk-3-0
+fonts-noto
+fonts-noto-extra
+fonts-noto-color-emoji
+fonts-dejavu-core
+"""
 
 [deploy]
 startCommand = "node index.js"
