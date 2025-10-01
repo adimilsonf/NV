@@ -1,3 +1,4 @@
+// index.js
 const express = require("express");
 const fs = require("fs");
 const axios = require("axios");
@@ -25,14 +26,14 @@ function logChromiumBinPresence() {
 // Pré-aquece: força extração para /tmp/chromium
 async function prewarmChromium() {
   logChromiumBinPresence();
-  executablePathCache = await chromium.executablePath(); // <-- () AQUI
+  executablePathCache = await chromium.executablePath();
   if (!executablePathCache) throw new Error("chromium.executablePath() retornou vazio");
   console.log("[chromium] executablePath:", executablePathCache);
 }
 
 async function getBrowser() {
   if (!browserPromise) {
-    const pathToExe = executablePathCache || (await chromium.executablePath()); // <-- () AQUI
+    const pathToExe = executablePathCache || (await chromium.executablePath());
     browserPromise = puppeteer.launch({
       args: [
         ...chromium.args,
@@ -43,7 +44,8 @@ async function getBrowser() {
       ],
       defaultViewport: chromium.defaultViewport,
       executablePath: pathToExe,
-      headless: true,
+      headless: chromium.headless, // usa o modo correto do Sparticuz
+      ignoreHTTPSErrors: true,
     });
   }
   return browserPromise;
@@ -77,19 +79,25 @@ app.get("/gerar-pdf", async (req, res) => {
 
   const cnpj = (req.query.cnpj || "").replace(/\D/g, "");
   if (!cnpj) {
-    return res.status(400).send("❌ Informe um CNPJ na URL, ex: /gerar-pdf?cnpj=04486026000142");
+    return res
+      .status(400)
+      .send("❌ Informe um CNPJ na URL, ex: /gerar-pdf?cnpj=04486026000142");
   }
 
   const release = await acquire();
   let page;
   try {
-    // 1) BrasilAPI
-    const { data } = await axios.get(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { timeout: 20000 });
-    const razao = data.razao_social || "Não encontrado";
-    let fantasia = (data.nome_fantasia || "").trim();
+    // 1) BrasilAPI (corrigido: string com crases)
+    const { data } = await axios.get(
+      `https://brasilapi.com.br/api/cnpj/v1/${cnpj}`,
+      { timeout: 20000 }
+    );
+
+    const razao = (data && data.razao_social) || "Não encontrado";
+    let fantasia = ((data && data.nome_fantasia) || "").trim();
     if (!fantasia || fantasia.toLowerCase() === "não encontrado") fantasia = razao;
 
-    // 2) Data/Hora SP (server-side)
+    // 2) Data/Hora SP (server-side)  (corrigido: template string)
     const formatter = new Intl.DateTimeFormat("pt-BR", {
       timeZone: "America/Sao_Paulo",
       year: "numeric",
@@ -101,7 +109,8 @@ app.get("/gerar-pdf", async (req, res) => {
     const dataHora = `${formatter.format(new Date())} (Horário SP)`;
 
     // 3) Template
-    let html = fs.readFileSync("template.html", "utf8")
+    const htmlTemplate = fs.readFileSync(path.join(process.cwd(), "template.html"), "utf8");
+    let html = htmlTemplate
       .replace(/{{CNPJ}}/g, cnpj)
       .replace(/{{RAZAO}}/g, razao)
       .replace(/{{FANTASIA}}/g, fantasia)
@@ -110,22 +119,38 @@ app.get("/gerar-pdf", async (req, res) => {
     // 4) Render
     const browser = await getBrowser();
     page = await browser.newPage();
+
+    // Garante CSS de tela e fontes web
+    await page.emulateMediaType("screen");
     try { await page.emulateTimezone("America/Sao_Paulo"); } catch {}
+
+    // Se seu template referencia CSS/IMG externos, use base/href absoluto
     await page.setContent(html, { waitUntil: "networkidle0", timeout: 45000 });
 
-    const pdfBuffer = await page.pdf({ format: "A4", printBackground: true });
+    const pdfBuffer = await page.pdf({
+      format: "A4",
+      printBackground: true,
+      preferCSSPageSize: true,
+      margin: { top: "12mm", right: "12mm", bottom: "12mm", left: "12mm" },
+    });
 
-    const fileName = `Proposta Comercial PagBank - ${razao}.pdf`.replace(/[\\/:*?"<>|]/g, "");
+    // 5) Filename (corrigido: template string + sanitize)
+    const safeRazao = String(razao).replace(/[\\/:*?"<>|]/g, "");
+    const fileName = `Proposta Comercial PagBank - ${safeRazao}.pdf`;
+
     res.set({
       "Content-Type": "application/pdf",
       "Content-Disposition": `attachment; filename="${fileName}"`,
+      "Content-Length": pdfBuffer.length,
     });
     res.send(pdfBuffer);
   } catch (err) {
     console.error("❌ Erro ao gerar PDF:", err?.response?.data || err.message);
     res.status(500).send("Erro ao gerar o PDF.");
   } finally {
-    if (page) { try { await page.close({ runBeforeUnload: true }); } catch {} }
+    if (page) {
+      try { await page.close({ runBeforeUnload: true }); } catch {}
+    }
     release();
   }
 });
