@@ -12,7 +12,7 @@ const MAX_CONCURRENT = parseInt(process.env.MAX_CONCURRENT || "2", 10);
 let browserPromise = null;
 let executablePathCache = null;
 
-// (opcional) logs úteis
+/* ===================== UTILS / LOGS ===================== */
 function logChromiumBinPresence() {
   try {
     const pkgRoot = path.dirname(require.resolve("@sparticuz/chromium/package.json"));
@@ -23,7 +23,7 @@ function logChromiumBinPresence() {
   }
 }
 
-// Pré-aquece: força extração para /tmp/chromium
+/* ===================== WARMUP CHROMIUM ===================== */
 async function prewarmChromium() {
   logChromiumBinPresence();
   executablePathCache = await chromium.executablePath();
@@ -31,27 +31,30 @@ async function prewarmChromium() {
   console.log("[chromium] executablePath:", executablePathCache);
 }
 
+/* ===================== LAUNCHER PUPPETEER ===================== */
 async function getBrowser() {
   if (!browserPromise) {
     const pathToExe = executablePathCache || (await chromium.executablePath());
+
     browserPromise = puppeteer.launch({
       args: [
         ...chromium.args,
         "--no-sandbox",
         "--disable-setuid-sandbox",
         "--disable-dev-shm-usage",
-        "--single-process",
+        // ATENÇÃO: não usar --single-process (causa travas/parciais)
       ],
       defaultViewport: chromium.defaultViewport,
       executablePath: pathToExe,
       headless: chromium.headless, // usa o modo correto do Sparticuz
       ignoreHTTPSErrors: true,
+      env: { ...process.env, TZ: "America/Sao_Paulo" },
     });
   }
   return browserPromise;
 }
 
-// Semáforo simples p/ limitar concorrência
+/* ===================== SEMÁFORO (CONCORRÊNCIA) ===================== */
 let inFlight = 0;
 const queue = [];
 function acquire() {
@@ -72,32 +75,33 @@ function acquire() {
   });
 }
 
+/* ===================== APP ===================== */
 const app = express();
 
 app.get("/gerar-pdf", async (req, res) => {
+  // evita o Railway/NGINX matar a conexão cedo
   req.setTimeout(120000);
 
   const cnpj = (req.query.cnpj || "").replace(/\D/g, "");
   if (!cnpj) {
-    return res
-      .status(400)
-      .send("❌ Informe um CNPJ na URL, ex: /gerar-pdf?cnpj=04486026000142");
+    return res.status(400).send("❌ Informe um CNPJ na URL, ex: /gerar-pdf?cnpj=04486026000142");
   }
 
   const release = await acquire();
   let page;
+
   try {
-    // 1) BrasilAPI (corrigido: string com crases)
+    /* 1) BrasilAPI */
     const { data } = await axios.get(
       `https://brasilapi.com.br/api/cnpj/v1/${cnpj}`,
       { timeout: 20000 }
     );
 
-    const razao = (data && data.razao_social) || "Não encontrado";
-    let fantasia = ((data && data.nome_fantasia) || "").trim();
+    const razao = data?.razao_social || "Não encontrado";
+    let fantasia = (data?.nome_fantasia || "").trim();
     if (!fantasia || fantasia.toLowerCase() === "não encontrado") fantasia = razao;
 
-    // 2) Data/Hora SP (server-side)  (corrigido: template string)
+    /* 2) Data/Hora SP (server-side) */
     const formatter = new Intl.DateTimeFormat("pt-BR", {
       timeZone: "America/Sao_Paulo",
       year: "numeric",
@@ -108,41 +112,51 @@ app.get("/gerar-pdf", async (req, res) => {
     });
     const dataHora = `${formatter.format(new Date())} (Horário SP)`;
 
-    // 3) Template
-    const htmlTemplate = fs.readFileSync(path.join(process.cwd(), "template.html"), "utf8");
-    let html = htmlTemplate
+    /* 3) Template */
+    const templatePath = path.join(process.cwd(), "template.html");
+    if (!fs.existsSync(templatePath)) {
+      throw new Error(`template.html não encontrado em ${templatePath}`);
+    }
+
+    const htmlTemplate = fs.readFileSync(templatePath, "utf8");
+    const html = htmlTemplate
       .replace(/{{CNPJ}}/g, cnpj)
       .replace(/{{RAZAO}}/g, razao)
       .replace(/{{FANTASIA}}/g, fantasia)
       .replace(/{{DATA_HORA}}/g, dataHora);
 
-    // 4) Render
+    /* 4) Render */
     const browser = await getBrowser();
     page = await browser.newPage();
 
-    // Garante CSS de tela e fontes web
+    // melhora fidelidade visual (usa CSS de tela)
     await page.emulateMediaType("screen");
     try { await page.emulateTimezone("America/Sao_Paulo"); } catch {}
 
-    // Se seu template referencia CSS/IMG externos, use base/href absoluto
-    await page.setContent(html, { waitUntil: "networkidle0", timeout: 45000 });
+    // carrega e espera fontes/CSS externos (Google Fonts, etc.)
+    await page.setContent(html, { waitUntil: "networkidle0", timeout: 60000 });
 
     const pdfBuffer = await page.pdf({
       format: "A4",
       printBackground: true,
       preferCSSPageSize: true,
       margin: { top: "12mm", right: "12mm", bottom: "12mm", left: "12mm" },
+      timeout: 0, // não aborta PDF em páginas pesadas
     });
 
-    // 5) Filename (corrigido: template string + sanitize)
+    // sanity check: evita enviar PDF minúsculo (provável corrompido)
+    if (!pdfBuffer || pdfBuffer.length < 1024) {
+      console.error("⚠️ PDF muito pequeno:", pdfBuffer?.length);
+      throw new Error("PDF gerado com tamanho inesperado");
+    }
+
+    /* 5) Resposta */
     const safeRazao = String(razao).replace(/[\\/:*?"<>|]/g, "");
     const fileName = `Proposta Comercial PagBank - ${safeRazao}.pdf`;
 
-    res.set({
-      "Content-Type": "application/pdf",
-      "Content-Disposition": `attachment; filename="${fileName}"`,
-      "Content-Length": pdfBuffer.length,
-    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="${fileName}"`);
+    // NÃO definir Content-Length manualmente: proxies podem comprimir/alterar tamanho
     res.send(pdfBuffer);
   } catch (err) {
     console.error("❌ Erro ao gerar PDF:", err?.response?.data || err.message);
@@ -157,6 +171,7 @@ app.get("/gerar-pdf", async (req, res) => {
 
 app.get("/health", (_req, res) => res.send("ok"));
 
+/* ===================== START ===================== */
 prewarmChromium()
   .then(() => {
     app.listen(PORT, () => {
