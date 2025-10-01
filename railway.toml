@@ -2,8 +2,6 @@
 builder = "NIXPACKS"
 NIXPACKS_NODE_VERSION = "20"
 NIXPACKS_BUILD_CMD = "npm install --omit=dev"
-
-# Fontes e libs necessárias para renderizar PDFs corretamente
 NIXPACKS_PKGS = """
 libnss3
 libxss1
