@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Gerador de Alvará - Formulário</title>
+  <link rel="stylesheet" href="/public/styles.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Gerador de Alvará de Pagamento</h1>
+    <form action="/generate" method="post">
+      <label>Credor <input name="credor" value="<%= defaults.credor || '' %>"></label>
+      <label>CPF/CNPJ <input name="cpfCnpj" value="<%= defaults.cpfCnpj || '' %>"></label>
+      <label>Advogado <input name="advogado" value="<%= defaults.advogado || '' %>"></label>
+      <label>Agência <input name="agencia" value="<%= defaults.agencia || '' %>"></label>
+      <label>Conta <input name="conta" value="<%= defaults.conta || '' %>"></label>
+      <label>Processo <input name="processo" value="<%= defaults.processo || '' %>"></label>
+      <label>Cumprimento de Sentença contra <input name="contra" value="<%= defaults.contra || ''%>"></label>
+      <label>Assunto <input name="assunto" value="<%= defaults.assunto || '' %>"></label>
+      <label>Situação <input name="situacao" value="<%= defaults.situacao || '' %>"></label>
+      <label>Valor <input name="valor" value="<%= defaults.valor || '' %>"></label>
+      <label>Data de emissão <input name="dataEmissao" value="<%= defaults.dataEmissao || '' %>"></label>
+      <label>Observações <textarea name="observacoes"><%= defaults.observacoes || '' %></textarea></label>
+      <label>Código de barras (opcional - se vazio gera aleatório) <input name="barcodeText"></label>
+
+      <div class="actions">
+        <button type="submit">Gerar PDF</button>
+      </div>
+    </form>
+    <p class="note">Campos editáveis — preencha e clique em "Gerar PDF".</p>
+    <p class="note">O PDF gerado terá a identidade visual do documento enviado (brasão e assinatura incluídos).</p>
+  </main>
+</body>
+</html>

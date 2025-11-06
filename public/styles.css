@@ -1,0 +1,8 @@
+body { font-family: Arial, Helvetica, sans-serif; background:#f5f5f5; margin:0; padding:20px;}
+.container { max-width:820px; margin:0 auto; background:#fff; padding:20px; border-radius:6px; box-shadow:0 2px 8px rgba(0,0,0,0.08);}
+h1 { margin-top:0; }
+form label { display:block; margin-bottom:8px; font-size:13px; }
+form input[type="text"], form textarea { width:100%; padding:8px; border:1px solid #ccc; border-radius:4px; box-sizing:border-box; }
+.actions { margin-top:12px; }
+button { padding:10px 16px; background:#2b7cff; color:#fff; border:none; border-radius:5px; cursor:pointer;}
+.note { color:#666; margin-top:14px; font-size:13px;}

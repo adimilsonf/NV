@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width"/>
+  <title>Alvará de Pagamento</title>
+  <style>
+    @page { size: A4; margin: 0; }
+    body { font-family: "Helvetica", Arial, sans-serif; color: #111; margin: 0; padding: 0; }
+    .page { padding: 36px 48px; }
+    .header { text-align: center; margin-bottom: 12px; }
+    .header img.logo { width: 110px; height: auto; display:block; margin: 0 auto; }
+    .title { font-weight:700; font-size:18px; margin-top:8px; letter-spacing:0.6px; }
+    .subtitle { font-size:12px; margin-top:2px; color:#222; }
+    .lines { margin-top: 14px; padding-top: 8px; }
+    .row { display:flex; flex-direction:row; align-items:flex-start; gap: 12px; margin-bottom: 6px;}
+    .col { flex:1; min-width:120px; }
+    .label { font-weight: 700; font-size:12px; }
+    .value { font-weight: 400; font-size:13px; }
+    .bold { font-weight:800; }
+    .barcode { margin-top: 10px; text-align: left; }
+    .barcode img { height:54px; }
+    .valor { font-weight: 800; font-size: 16px; margin-top: 10px; }
+    .small { font-size: 11px; color: #222; line-height:1.4; }
+    .signature { text-align:center; margin-top:40px; }
+    .signature img { width:260px; height:auto; display:block; margin: 6px auto 0; opacity:0.98; }
+    .footer-note { margin-top:12px; font-size:11px; color:#222; }
+    hr.sep { border: none; border-top: 1px solid #000; margin: 12px 0; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <img class="logo" src="https://www.tjrs.jus.br/novo/doar-e-legal/wp-content/themes/doar-e-legal/img/logo_brasao_quadrado.png" alt="Brasão"/>
+      <div class="title">PROCESSO JUDICIAL ELETRÔNICO</div>
+      <div class="subtitle">Processo Judiciário</div>
+    </div>
+
+    <div class="lines">
+      <div class="row">
+        <div class="col"><div class="label">Credor:</div><div class="value"><%= data.credor %></div></div>
+        <div class="col"><div class="label">CPF-CNPJ:</div><div class="value"><%= data.cpfCnpj %></div></div>
+      </div>
+
+      <div class="row">
+        <div class="col"><div class="label">Advogado(a):</div><div class="value"><%= data.advogado %></div></div>
+        <div class="col"><div class="label">Agência:</div><div class="value"><%= data.agencia %></div></div>
+        <div class="col"><div class="label">Conta:</div><div class="value"><%= data.conta %></div></div>
+      </div>
+
+      <div class="row">
+        <div class="col"><div class="label">Processo Nº:</div><div class="value bold"><%= data.processo %></div></div>
+      </div>
+
+      <div class="row" style="border-top:1px solid #000; padding-top:8px;">
+        <div class="col"><div class="label">CUMPRIMENTO DE SENTENÇA CONTRA:</div><div class="value"><%= data.contra %></div></div>
+      </div>
+
+      <div class="row" style="margin-top:8px;">
+        <div class="col"><div class="label">Assunto:</div><div class="value"><%= data.assunto %></div></div>
+        <div class="col"><div class="label">Situação:</div><div class="value bold"><%= data.situacao %></div></div>
+      </div>
+
+      <div class="barcode">
+        <img src="<%= barcodeDataUri %>" alt="barcode">
+        <div class="small"><strong>Código:</strong> <%= barcodeText %></div>
+      </div>
+
+      <div class="valor">Valor a receber: <%= data.valor %></div>
+
+      <hr class="sep"/>
+
+      <div class="small">
+        <p>O valor a receber: <%= data.valor %> será depositado em uma conta corrente ou poupança de sua titularidade indicada no ato da liberação.</p>
+        <p><%= data.observacoes %></p>
+        <p>Emitido em: <%= data.dataEmissao %></p>
+      </div>
+    </div>
+
+    <div class="signature">
+      <div class="small">PODER JUDICIÁRIO<br/>TJ– Tribunal de Justiça.</div>
+      <img src="https://upload.wikimedia.org/wikipedia/commons/4/42/Assinatura_de_Fernando_Henrique_Cardoso_-_vers%C3%A3o_3.svg" alt="assinatura">
+    </div>
+  </div>
+</body>
+</html>
