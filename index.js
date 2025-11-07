@@ -1,5 +1,10 @@
 /**
- * server.js v5.2 - Alvará Generator (logo fetched -> dataURI + streaming + browser reuse)
+ * server.js v5.3 - Alvará Generator (fix: removed page.waitForTimeout -> sleep)
+ *
+ * • Usa puppeteer completo
+ * • Converte logo remota para dataURI para evitar timeouts
+ * • Reusa browser, stream seguro do PDF
+ * • Compatível com Railway
  */
 
 const express = require('express');
@@ -25,6 +30,9 @@ app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.urlencoded({ extended: true }));
 
 let browser;
+
+// small sleep util - works in any Node/Puppeteer version
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // util: baixa uma imagem HTTPS e retorna Buffer (ou lança erro)
 function fetchImageBuffer(url, timeout = 15000) {
@@ -112,13 +120,12 @@ app.post('/generate', async (req, res) => {
     });
     const barcodeDataUri = 'data:image/png;base64,' + pngBuffer.toString('base64');
 
-    // === LOGO: se o usuário enviar logoUrl (campo do form), tentamos buscar e converte-la em dataURI ===
-    // defaultLogoUrl pode ser o que você usava: https://i.ibb.co/gNwMTrv/logo-brasao-quadrado.png
+    // === LOGO: fetch + convert to dataURI ===
     const logoUrl = (req.body.logoUrl && req.body.logoUrl.trim()) || 'https://i.ibb.co/gNwMTrv/logo-brasao-quadrado.png';
     let logoDataUri = null;
     try {
       const imgBuf = await fetchImageBuffer(logoUrl, 15000); // timeout 15s
-      // tenta detectar mime pelo primeiro bytes (simples heurística)
+      // detect mime type
       let mime = 'image/png';
       const header = imgBuf.slice(0, 8).toString('hex').toLowerCase();
       if (header.startsWith('ffd8')) mime = 'image/jpeg';
@@ -128,18 +135,17 @@ app.post('/generate', async (req, res) => {
       console.log('✅ Logo convertida para dataURI (bytes):', imgBuf.length);
     } catch (err) {
       console.warn('⚠️ Falha ao buscar a logo externa, seguindo sem logo. Erro:', err.message);
-      // fallback: tenta carregar uma logo local se existir em /public/assets/logo_page.png
       const localPath = path.join(__dirname, 'public', 'assets', 'logo_page.png');
       if (fs.existsSync(localPath)) {
         const localBuf = fs.readFileSync(localPath);
         logoDataUri = bufferToDataUri(localBuf, 'image/png');
         console.log('✅ Usando logo local em public/assets/logo_page.png');
       } else {
-        logoDataUri = null; // template deve lidar com null (não exibir logo)
+        logoDataUri = null;
       }
     }
 
-    // renderizar HTML: passe logoDataUri (ou null)
+    // render HTML passing logoDataUri
     const html = await ejs.renderFile(path.join(__dirname, 'views', 'alvara.ejs'), {
       data,
       barcodeDataUri,
@@ -151,12 +157,11 @@ app.post('/generate', async (req, res) => {
     const browserInstance = await getBrowser();
     const page = await browserInstance.newPage();
 
-    // Aumenta timeout; evita networkidle0 (que espera conexões externas) — usamos 'load' ou 'domcontentloaded'
-    // como já injetamos imagens como data URIs, network idle não é necessário.
+    // Use domcontentloaded (faster, network requests are not necessary because images are data URIs)
     await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 120000 });
 
-    // Espera opcional por pequenos timers (caso o template execute JS)
-    await page.waitForTimeout(200); // curto, só para estabilidade
+    // brief sleep to be safe (replaces page.waitForTimeout)
+    await sleep(200);
 
     const pdfBuffer = await page.pdf({
       format: 'A4',
@@ -173,7 +178,7 @@ app.post('/generate', async (req, res) => {
     }
     console.log('✅ PDF gerado com sucesso:', pdfBuffer.length, 'bytes');
 
-    // salva temporário e stream (mesma lógica do v5)
+    // save temp and stream
     const tmpFilename = `alvara_${Date.now()}.pdf`;
     const tmpPath = path.join(tmpDir, tmpFilename);
     await writeFile(tmpPath, pdfBuffer, { encoding: 'binary' });
@@ -198,7 +203,6 @@ app.post('/generate', async (req, res) => {
 
   } catch (err) {
     console.error('❌ Erro ao gerar PDF:', err);
-    // se browser morreu, força reinício
     if (browser && !browser.isConnected()) browser = null;
     return res.status(500).send('Erro ao gerar PDF: ' + (err.message || err));
   }
