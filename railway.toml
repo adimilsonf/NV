@@ -1,0 +1,48 @@
+# ==================================================================
+# RAILWAY CONFIG - Alvará de Pagamento Generator v3.0
+# Node.js + Express + EJS + puppeteer-core (Chromium real Nix)
+# ==================================================================
+
+[build]
+builder = "NIXPACKS"
+NIXPACKS_NODE_VERSION = "20"
+NIXPACKS_BUILD_CMD = "npm install --omit=dev"
+
+# 🧠 Aqui a mágica: adicionamos o Chromium do Nix (não o snap!)
+# O pacote 'chromium' do NixPkgs fornece o binário completo em /nix/store/.../bin/chromium
+NIXPACKS_EXTRA_NIXPACKS = """
+pkgs.chromium
+"""
+
+# Dependências gráficas para Chromium headless
+NIXPACKS_PKGS = """
+libnss3
+libxss1
+libasound2
+libatk1.0-0
+libatk-bridge2.0-0
+libx11-6
+libx11-xcb1
+libxcomposite1
+libxdamage1
+libxext6
+libxfixes3
+libxrandr2
+libgbm1
+libpangocairo-1.0-0
+libpango-1.0-0
+libgtk-3-0
+fonts-noto
+fonts-noto-extra
+fonts-noto-color-emoji
+fonts-dejavu-core
+"""
+
+[deploy]
+startCommand = "node index.js"
+port = 3000
+healthcheckPath = "/_health"
+
+[variables]
+NODE_ENV = "production"
+# 🚨 Remova CHROME_PATH — o server.js detecta automaticamente o Chromium real do Nix.
