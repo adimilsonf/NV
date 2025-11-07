@@ -31,7 +31,14 @@
 <body>
   <div class="page">
     <div class="header">
-      <img class="logo" src="" alt="Brasão"/>
+      <!-- no header -->
+<% if (logoDataUri) { %>
+  <img class="logo" src="<%= logoDataUri %>" alt="Brasão"/>
+<% } else { %>
+  <!-- opcional: fallback visual ou nada -->
+  <div style="height:80px;"></div>
+<% } %>
+
       <div class="title">PROCESSO JUDICIAL ELETRÔNICO</div>
       <div class="subtitle">Processo Judiciário</div>
     </div>
