@@ -1,18 +1,12 @@
 /**
- * server.js v5.0 - Gerador de Alvará (Puppeteer full + Streaming fix)
- * -----------------------------------------------------------
- * • Usa puppeteer completo (Chromium baixado automaticamente)
- * • Corrigido envio binário do PDF (stream seguro)
- * • Compatível com Railway e Nixpacks
- * • Verifica integridade e logs detalhados
- * -----------------------------------------------------------
+ * server.js v5.1 - Alvará Generator (timeout fix + browser reuse)
  */
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const ejs = require('ejs');
 const bwipjs = require('bwip-js');
-const puppeteer = require('puppeteer'); // ✅ Puppeteer completo
+const puppeteer = require('puppeteer');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
@@ -29,12 +23,30 @@ app.set('views', path.join(__dirname, 'views'));
 app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// rota principal (formulário)
-app.get('/', (req, res) => {
-  res.render('form', { defaults: {} });
-});
+let browser; // reusar entre requisições
 
-// rota para gerar PDF (corrigida)
+async function getBrowser() {
+  try {
+    if (!browser || !browser.isConnected()) {
+      console.log('🚀 Iniciando nova instância do Chromium...');
+      browser = await puppeteer.launch({
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--single-process',
+          '--disable-gpu'
+        ]
+      });
+    }
+    return browser;
+  } catch (err) {
+    console.error('❌ Erro ao iniciar o navegador:', err);
+    throw err;
+  }
+}
+
 app.post('/generate', async (req, res) => {
   try {
     const data = {
@@ -52,12 +64,10 @@ app.post('/generate', async (req, res) => {
       observacoes: req.body.observacoes || ''
     };
 
-    // Gera texto do código de barras aleatório
     const barcodeText = req.body.barcodeText && req.body.barcodeText.trim().length
       ? req.body.barcodeText.trim()
       : crypto.randomBytes(6).toString('hex').toUpperCase();
 
-    // Gera o código de barras (base64)
     const pngBuffer = await bwipjs.toBuffer({
       bcid: 'code128',
       text: barcodeText,
@@ -67,83 +77,68 @@ app.post('/generate', async (req, res) => {
     });
     const barcodeDataUri = 'data:image/png;base64,' + pngBuffer.toString('base64');
 
-    // Renderiza o HTML do alvará
     const html = await ejs.renderFile(path.join(__dirname, 'views', 'alvara.ejs'), {
       data,
       barcodeDataUri,
       barcodeText
     });
 
-    // Inicia o Chromium headless do Puppeteer
-    const browser = await puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--single-process',
-        '--disable-gpu'
-      ]
-    });
+    const browserInstance = await getBrowser();
+    const page = await browserInstance.newPage();
 
-    const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: 'networkidle0' });
+    // aumenta timeout de navegação para 120s
+    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 120000 });
 
-    // Gera o PDF com margens corretas
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
       margin: { top: '18mm', right: '12mm', bottom: '18mm', left: '12mm' }
     });
 
-    await browser.close();
+    await page.close();
 
-    // Verifica integridade do buffer
     if (!pdfBuffer || pdfBuffer.length < 1000) {
       console.error('⚠️ PDF gerado com tamanho inválido:', pdfBuffer ? pdfBuffer.length : 'null');
-      return res.status(500).send('Erro ao gerar PDF (arquivo vazio ou corrompido).');
+      return res.status(500).send('Erro: PDF gerado inválido.');
     }
 
-    console.log('✅ PDF gerado com sucesso:', pdfBuffer.length, 'bytes');
-
-    // Salva o arquivo temporariamente
     const tmpFilename = `alvara_${Date.now()}.pdf`;
     const tmpPath = path.join(tmpDir, tmpFilename);
     await writeFile(tmpPath, pdfBuffer, { encoding: 'binary' });
 
-    // Define headers binários e evita compressão
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${tmpFilename}"`);
     res.setHeader('Content-Transfer-Encoding', 'binary');
     res.setHeader('Content-Encoding', 'identity');
     res.setHeader('Content-Length', pdfBuffer.length.toString());
 
-    // Faz o stream do arquivo temporário
     const stream = fs.createReadStream(tmpPath);
     stream.pipe(res);
 
-    // Remove o arquivo ao finalizar
     stream.on('end', async () => {
-      try { await unlink(tmpPath); } catch (e) { /* ignora */ }
+      try { await unlink(tmpPath); } catch { }
     });
 
     stream.on('error', async (err) => {
-      console.error('Erro ao ler o arquivo temporário do PDF:', err);
-      try { await unlink(tmpPath); } catch (e) { /* ignora */ }
+      console.error('Erro no stream de PDF:', err);
+      try { await unlink(tmpPath); } catch { }
       if (!res.headersSent) res.status(500).send('Erro ao enviar PDF.');
     });
 
   } catch (err) {
     console.error('❌ Erro ao gerar PDF:', err);
+    if (browser && !browser.isConnected()) browser = null; // força reinício
     res.status(500).send('Erro ao gerar PDF: ' + err.message);
   }
 });
 
-// healthcheck (para Railway)
+app.get('/', (req, res) => res.render('form', { defaults: {} }));
 app.get('/_health', (_req, res) => res.json({ status: 'ok' }));
 
-// Inicia servidor
 const PORT = parseInt(process.env.PORT, 10) || 3000;
-app.listen(PORT, () => {
-  console.log(`🚀 Servidor rodando em http://localhost:${PORT} (PORT=${PORT})`);
+app.listen(PORT, () => console.log(`✅ Servidor rodando na porta ${PORT}`));
+
+// encerra browser ao sair
+process.on('exit', async () => {
+  if (browser) await browser.close();
 });
