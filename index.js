@@ -1,9 +1,10 @@
 /**
- * server.js v4.0 - Gerador de Alvará (Puppeteer full compatível com Railway)
+ * server.js v5.0 - Gerador de Alvará (Puppeteer full + Streaming fix)
  * -----------------------------------------------------------
- * • Usa puppeteer completo (não puppeteer-core)
- * • Chromium baixado automaticamente (sem snap) 
- * • Totalmente compatível com Railway e Nixpacks
+ * • Usa puppeteer completo (Chromium baixado automaticamente)
+ * • Corrigido envio binário do PDF (stream seguro)
+ * • Compatível com Railway e Nixpacks
+ * • Verifica integridade e logs detalhados
  * -----------------------------------------------------------
  */
 
@@ -14,6 +15,13 @@ const bwipjs = require('bwip-js');
 const puppeteer = require('puppeteer'); // ✅ Puppeteer completo
 const crypto = require('crypto');
 const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const util = require('util');
+
+const writeFile = util.promisify(fs.writeFile);
+const unlink = util.promisify(fs.unlink);
+const tmpDir = os.tmpdir();
 
 const app = express();
 app.set('view engine', 'ejs');
@@ -26,7 +34,7 @@ app.get('/', (req, res) => {
   res.render('form', { defaults: {} });
 });
 
-// rota para gerar PDF
+// rota para gerar PDF (corrigida)
 app.post('/generate', async (req, res) => {
   try {
     const data = {
@@ -44,12 +52,12 @@ app.post('/generate', async (req, res) => {
       observacoes: req.body.observacoes || ''
     };
 
-    // Gera texto de código de barras aleatório
+    // Gera texto do código de barras aleatório
     const barcodeText = req.body.barcodeText && req.body.barcodeText.trim().length
       ? req.body.barcodeText.trim()
       : crypto.randomBytes(6).toString('hex').toUpperCase();
 
-    // Gera o código de barras com bwip-js
+    // Gera o código de barras (base64)
     const pngBuffer = await bwipjs.toBuffer({
       bcid: 'code128',
       text: barcodeText,
@@ -59,14 +67,14 @@ app.post('/generate', async (req, res) => {
     });
     const barcodeDataUri = 'data:image/png;base64,' + pngBuffer.toString('base64');
 
-    // Renderiza HTML do template
+    // Renderiza o HTML do alvará
     const html = await ejs.renderFile(path.join(__dirname, 'views', 'alvara.ejs'), {
       data,
       barcodeDataUri,
       barcodeText
     });
 
-    // Inicia Puppeteer com Chromium interno (baixado automaticamente)
+    // Inicia o Chromium headless do Puppeteer
     const browser = await puppeteer.launch({
       headless: true,
       args: [
@@ -81,7 +89,7 @@ app.post('/generate', async (req, res) => {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
-    // Gera o PDF
+    // Gera o PDF com margens corretas
     const pdfBuffer = await page.pdf({
       format: 'A4',
       printBackground: true,
@@ -90,26 +98,52 @@ app.post('/generate', async (req, res) => {
 
     await browser.close();
 
-    // Retorna o PDF para download
-    const filename = `alvara_${Date.now()}.pdf`;
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${filename}"`,
-      'Content-Length': pdfBuffer.length
+    // Verifica integridade do buffer
+    if (!pdfBuffer || pdfBuffer.length < 1000) {
+      console.error('⚠️ PDF gerado com tamanho inválido:', pdfBuffer ? pdfBuffer.length : 'null');
+      return res.status(500).send('Erro ao gerar PDF (arquivo vazio ou corrompido).');
+    }
+
+    console.log('✅ PDF gerado com sucesso:', pdfBuffer.length, 'bytes');
+
+    // Salva o arquivo temporariamente
+    const tmpFilename = `alvara_${Date.now()}.pdf`;
+    const tmpPath = path.join(tmpDir, tmpFilename);
+    await writeFile(tmpPath, pdfBuffer, { encoding: 'binary' });
+
+    // Define headers binários e evita compressão
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${tmpFilename}"`);
+    res.setHeader('Content-Transfer-Encoding', 'binary');
+    res.setHeader('Content-Encoding', 'identity');
+    res.setHeader('Content-Length', pdfBuffer.length.toString());
+
+    // Faz o stream do arquivo temporário
+    const stream = fs.createReadStream(tmpPath);
+    stream.pipe(res);
+
+    // Remove o arquivo ao finalizar
+    stream.on('end', async () => {
+      try { await unlink(tmpPath); } catch (e) { /* ignora */ }
     });
-    return res.send(pdfBuffer);
+
+    stream.on('error', async (err) => {
+      console.error('Erro ao ler o arquivo temporário do PDF:', err);
+      try { await unlink(tmpPath); } catch (e) { /* ignora */ }
+      if (!res.headersSent) res.status(500).send('Erro ao enviar PDF.');
+    });
 
   } catch (err) {
     console.error('❌ Erro ao gerar PDF:', err);
-    return res.status(500).send('Erro ao gerar PDF: ' + err.message);
+    res.status(500).send('Erro ao gerar PDF: ' + err.message);
   }
 });
 
-// healthcheck (Railway usa para validar serviço)
+// healthcheck (para Railway)
 app.get('/_health', (_req, res) => res.json({ status: 'ok' }));
 
-// inicia servidor
+// Inicia servidor
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 app.listen(PORT, () => {
-  console.log(`✅ Servidor rodando em http://localhost:${PORT} (PORT=${PORT})`);
+  console.log(`🚀 Servidor rodando em http://localhost:${PORT} (PORT=${PORT})`);
 });
