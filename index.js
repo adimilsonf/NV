@@ -121,7 +121,7 @@ app.post('/generate', async (req, res) => {
     const barcodeDataUri = 'data:image/png;base64,' + pngBuffer.toString('base64');
 
     // === LOGO: fetch + convert to dataURI ===
-    const logoUrl = (req.body.logoUrl && req.body.logoUrl.trim()) || 'https://i.ibb.co/gNwMTrv/logo-brasao-quadrado.png';
+    const logoUrl = (req.body.logoUrl && req.body.logoUrl.trim()) || 'https://www.tjrs.jus.br/novo/eproc/wp-content/themes/eproc/images/Logotipo-Brasao-retangular-lettering-em-preto.png';
     let logoDataUri = null;
     try {
       const imgBuf = await fetchImageBuffer(logoUrl, 15000); // timeout 15s
