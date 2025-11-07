@@ -2,7 +2,7 @@
  * server.js v4.0 - Gerador de Alvará (Puppeteer full compatível com Railway)
  * -----------------------------------------------------------
  * • Usa puppeteer completo (não puppeteer-core)
- * • Chromium baixado automaticamente (sem snap)
+ * • Chromium baixado automaticamente (sem snap) 
  * • Totalmente compatível com Railway e Nixpacks
  * -----------------------------------------------------------
  */
