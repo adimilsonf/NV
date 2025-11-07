@@ -1,165 +1,151 @@
 /**
- * server.js v2.0
- * Gerador de Alvará -> recebe dados via formulário, gera barcode com bwip-js,
- * renderiza EJS e cria PDF usando puppeteer-core apontando para o Chromium do sistema.
- *
- * Ajuste: defina CHROME_PATH se o Chromium estiver em local diferente.
+ * server.js - chromium auto-detect (robusto para Nixpacks / Railway)
  */
 
 const express = require('express');
 const bodyParser = require('body-parser');
 const ejs = require('ejs');
 const bwipjs = require('bwip-js');
-const puppeteer = require('puppeteer-core'); // usamos puppeteer-core para não forçar download do Chromium
+const puppeteer = require('puppeteer-core');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
+const { execSync } = require('child_process');
 
 const app = express();
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
-
-// serve arquivos estáticos (styles + assets)
 app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// rota do formulário
-app.get('/', (req, res) => {
-  res.render('form', { defaults: {} });
-});
+function findChromiumBinary() {
+  const candidates = [];
 
-// POST para gerar PDF
+  // 1) explicit env var
+  if (process.env.CHROME_PATH) candidates.push(process.env.CHROME_PATH);
+
+  // 2) common linux paths (non-snap)
+  candidates.push('/usr/bin/chromium', '/usr/bin/chromium-browser', '/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/snap/bin/chromium');
+
+  // 3) look into /nix/store for chromium packages (Nixpacks)
+  try {
+    const nixRoot = '/nix/store';
+    if (fs.existsSync(nixRoot)) {
+      const entries = fs.readdirSync(nixRoot);
+      for (const e of entries) {
+        // heurística: nome com 'chromium' ou 'chromium-' ou 'chromium' anywhere
+        if (e.toLowerCase().includes('chromium')) {
+          const candidate = path.join(nixRoot, e, 'bin', 'chromium');
+          candidates.push(candidate);
+          // também chrome:
+          candidates.push(path.join(nixRoot, e, 'bin', 'google-chrome'));
+        }
+      }
+    }
+  } catch (err) {
+    // ignore
+  }
+
+  // 4) try `which chromium` and `which google-chrome`
+  try {
+    const whichChromium = execSync('which chromium || true').toString().trim();
+    if (whichChromium) candidates.push(whichChromium);
+  } catch (err) { /* ignore */ }
+  try {
+    const whichGC = execSync('which google-chrome || true').toString().trim();
+    if (whichGC) candidates.push(whichGC);
+  } catch (err) { /* ignore */ }
+
+  // check candidates for existence + executable
+  for (const c of candidates) {
+    if (!c) continue;
+    try {
+      if (fs.existsSync(c)) {
+        // sanity check: ensure it's not a snap stub that requires snap (skip /usr/bin/chromium-browser if it contains 'snap' text)
+        // we will try to run with --version to ensure it is executable
+        try {
+          const out = execSync(`${c} --version`, { timeout: 3000 }).toString();
+          if (/Chromium|Chrome/i.test(out)) {
+            return c;
+          }
+        } catch (err) {
+          // not runnable -> skip
+        }
+      }
+    } catch (err) {
+      // ignore and continue
+    }
+  }
+
+  return null;
+}
+
 app.post('/generate', async (req, res) => {
   try {
     const data = {
-      credor: req.body.credor || 'Andreia De Jesus Pedrosa Figueira',
-      cpfCnpj: req.body.cpfCnpj || '283.728.898-56',
-      advogado: req.body.advogado || 'Edson Paulo Lins Junior',
-      agencia: req.body.agencia || '5198',
-      conta: req.body.conta || '14068-2',
-      processo: req.body.processo || '001XXXX-23.2027.8.27.2706',
-      contra: req.body.contra || 'Luis Antunes',
-      assunto: req.body.assunto || 'Liquidação / Cumprimento / Execução',
+      credor: req.body.credor || 'Fulano',
+      cpfCnpj: req.body.cpfCnpj || '000.000.000-00',
+      advogado: req.body.advogado || 'Advogado',
+      agencia: req.body.agencia || '0000',
+      conta: req.body.conta || '000000',
+      processo: req.body.processo || '0000000-00.0000.0.00.0000',
+      contra: req.body.contra || 'Réu',
+      assunto: req.body.assunto || 'Assunto',
       situacao: req.body.situacao || 'AUTORIZADO',
-      valor: req.body.valor || 'R$ 39.874,98',
+      valor: req.body.valor || 'R$ 0,00',
       dataEmissao: req.body.dataEmissao || new Date().toLocaleDateString('pt-BR'),
       observacoes: req.body.observacoes || ''
     };
 
-    // barcode text (opcional no form)
     const barcodeText = req.body.barcodeText && req.body.barcodeText.trim().length
       ? req.body.barcodeText.trim()
       : crypto.randomBytes(6).toString('hex').toUpperCase();
 
-    // gerar png do barcode com bwip-js
-    const pngBuffer = await bwipjs.toBuffer({
-      bcid: 'code128',
-      text: barcodeText,
-      scale: 3,
-      height: 20,
-      includetext: false
-    });
+    const pngBuffer = await bwipjs.toBuffer({ bcid: 'code128', text: barcodeText, scale: 3, height: 20, includetext: false });
     const barcodeDataUri = 'data:image/png;base64,' + pngBuffer.toString('base64');
 
-    // renderizar HTML (views/alvara.ejs)
-    const html = await ejs.renderFile(path.join(__dirname, 'views', 'alvara.ejs'), {
-      data,
-      barcodeDataUri,
-      barcodeText
-    });
+    const html = await ejs.renderFile(path.join(__dirname, 'views', 'alvara.ejs'), { data, barcodeDataUri, barcodeText });
 
-    // localizar possível caminho do Chromium no ambiente
-    const possibleChromiumPaths = [
-      process.env.CHROME_PATH,                    // optional env var
-      '/usr/bin/chromium',
-      '/usr/bin/chromium-browser',
-      '/snap/bin/chromium',
-      '/usr/bin/google-chrome-stable',
-      '/usr/bin/google-chrome'
-    ].filter(Boolean);
-
-    let executablePath = null;
-    for (const p of possibleChromiumPaths) {
-      try {
-        if (fs.existsSync(p)) {
-          executablePath = p;
-          break;
-        }
-      } catch (err) {
-        // ignore
-      }
-    }
-
-    // Mensagem informativa
-    if (!executablePath) {
-      console.warn('AVISO: Não foi encontrado um binário Chromium nos caminhos padrão. ' +
-        'Defina a variável de ambiente CHROME_PATH ou instale chromium no runtime (NIXPACKS_PKGS inclui "chromium").');
-    } else {
-      console.log('Usando Chromium em:', executablePath);
-    }
-
-    // iniciar puppeteer-core apontando para o Chromium do sistema (se disponível)
-    let browser;
-    try {
-      const launchOptions = {
-        headless: true,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-gpu',
-          '--single-process'
-        ]
-      };
-
-      if (executablePath) {
-        launchOptions.executablePath = executablePath;
-      }
-
-      browser = await puppeteer.launch(launchOptions);
-    } catch (err) {
-      // se falhar, retornar erro amigável com instruções
-      console.error('Erro ao iniciar o navegador headless:', err.message);
+    const chromiumPath = findChromiumBinary();
+    if (!chromiumPath) {
+      console.error('Chromium binary not found. Candidates exhausted.');
+      console.error('To debug, run `ls -la /nix/store | head` in the build logs or set CHROME_PATH env var.');
       return res.status(500).send(
-        'Erro ao iniciar o Chromium no servidor. Se estiver em Railway/Nixpacks: ' +
-        'adicione "chromium" em NIXPACKS_PKGS no railway.toml e defina CHROME_PATH se necessário. ' +
-        'Detalhe técnico: ' + err.message
+        'Erro ao iniciar o Chromium no servidor. Não foi encontrado um binário Chromium executável.\n' +
+        'Dicas:\n' +
+        ' - Adicione "chromium" em NIXPACKS_PKGS no railway.toml.\n' +
+        ' - Defina a variável CHROME_PATH com o path correto (ex: /nix/store/.../bin/chromium).\n' +
+        ' - Confira os logs do build para localizar o path dentro de /nix/store.\n'
       );
     }
 
+    console.log('Usando Chromium em:', chromiumPath);
+
+    const launchOptions = {
+      executablePath: chromiumPath,
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process', '--disable-gpu']
+    };
+
+    const browser = await puppeteer.launch(launchOptions);
     const page = await browser.newPage();
-    // garantir fontes e imagens locais resolvendo relativo com base em /public
     await page.setContent(html, { waitUntil: 'networkidle0' });
 
-    // gerar PDF A4
-    const pdfBuffer = await page.pdf({
-      format: 'A4',
-      printBackground: true,
-      margin: { top: '18mm', right: '12mm', bottom: '18mm', left: '12mm' }
-    });
+    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true, margin: { top: '18mm', right: '12mm', bottom: '18mm', left: '12mm' } });
 
     await browser.close();
 
-    // enviar PDF como download
-    const filename = `alvara_${Date.now()}.pdf`;
-    res.set({
-      'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${filename}"`,
-      'Content-Length': pdfBuffer.length
-    });
+    res.set({ 'Content-Type': 'application/pdf', 'Content-Disposition': `attachment; filename="alvara_${Date.now()}.pdf"`, 'Content-Length': pdfBuffer.length });
     return res.send(pdfBuffer);
 
   } catch (err) {
-    console.error('Erro geral ao gerar PDF:', err);
-    return res.status(500).send('Erro ao gerar o PDF: ' + err.message);
+    console.error('Erro ao gerar PDF:', err);
+    return res.status(500).send('Erro ao gerar PDF: ' + err.message);
   }
 });
 
-// healthcheck
-app.get('/_health', (req, res) => res.json({ status: 'ok' }));
+app.get('/', (req, res) => res.render('form', { defaults: {} }));
+app.get('/_health', (_req, res) => res.json({ status: 'ok' }));
 
-// start
 const PORT = parseInt(process.env.PORT, 10) || 3000;
-app.listen(PORT, () => {
-  console.log(`Servidor rodando em http://localhost:${PORT} (PORT=${PORT})`);
-});
+app.listen(PORT, () => console.log(`Servidor rodando em http://localhost:${PORT} (PORT=${PORT})`));
