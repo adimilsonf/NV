@@ -1,5 +1,5 @@
 /**
- * server.js v5.1 - Alvará Generator (timeout fix + browser reuse)
+ * server.js v5.2 - Alvará Generator (logo fetched -> dataURI + streaming + browser reuse)
  */
 
 const express = require('express');
@@ -12,6 +12,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const util = require('util');
+const https = require('https');
 
 const writeFile = util.promisify(fs.writeFile);
 const unlink = util.promisify(fs.unlink);
@@ -23,7 +24,36 @@ app.set('views', path.join(__dirname, 'views'));
 app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use(bodyParser.urlencoded({ extended: true }));
 
-let browser; // reusar entre requisições
+let browser;
+
+// util: baixa uma imagem HTTPS e retorna Buffer (ou lança erro)
+function fetchImageBuffer(url, timeout = 15000) {
+  return new Promise((resolve, reject) => {
+    try {
+      const req = https.get(url, { timeout }, (res) => {
+        const { statusCode } = res;
+        if (statusCode !== 200) {
+          res.resume();
+          return reject(new Error('Image fetch failed. Status: ' + statusCode));
+        }
+        const chunks = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+      });
+      req.on('timeout', () => {
+        req.destroy(new Error('Image fetch timeout'));
+      });
+      req.on('error', (err) => reject(err));
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
+// converte buffer + mimeType para data URI
+function bufferToDataUri(buffer, mime = 'image/png') {
+  return `data:${mime};base64,${buffer.toString('base64')}`;
+}
 
 async function getBrowser() {
   try {
@@ -47,6 +77,10 @@ async function getBrowser() {
   }
 }
 
+// rota principal
+app.get('/', (req, res) => res.render('form', { defaults: {} }));
+
+// rota generate (fetch logo -> dataURI -> render -> pdf)
 app.post('/generate', async (req, res) => {
   try {
     const data = {
@@ -64,6 +98,7 @@ app.post('/generate', async (req, res) => {
       observacoes: req.body.observacoes || ''
     };
 
+    // barcode
     const barcodeText = req.body.barcodeText && req.body.barcodeText.trim().length
       ? req.body.barcodeText.trim()
       : crypto.randomBytes(6).toString('hex').toUpperCase();
@@ -77,17 +112,51 @@ app.post('/generate', async (req, res) => {
     });
     const barcodeDataUri = 'data:image/png;base64,' + pngBuffer.toString('base64');
 
+    // === LOGO: se o usuário enviar logoUrl (campo do form), tentamos buscar e converte-la em dataURI ===
+    // defaultLogoUrl pode ser o que você usava: https://i.ibb.co/gNwMTrv/logo-brasao-quadrado.png
+    const logoUrl = (req.body.logoUrl && req.body.logoUrl.trim()) || 'https://i.ibb.co/gNwMTrv/logo-brasao-quadrado.png';
+    let logoDataUri = null;
+    try {
+      const imgBuf = await fetchImageBuffer(logoUrl, 15000); // timeout 15s
+      // tenta detectar mime pelo primeiro bytes (simples heurística)
+      let mime = 'image/png';
+      const header = imgBuf.slice(0, 8).toString('hex').toLowerCase();
+      if (header.startsWith('ffd8')) mime = 'image/jpeg';
+      if (header.includes('89504e47')) mime = 'image/png';
+      if (header.includes('47494638')) mime = 'image/gif';
+      logoDataUri = bufferToDataUri(imgBuf, mime);
+      console.log('✅ Logo convertida para dataURI (bytes):', imgBuf.length);
+    } catch (err) {
+      console.warn('⚠️ Falha ao buscar a logo externa, seguindo sem logo. Erro:', err.message);
+      // fallback: tenta carregar uma logo local se existir em /public/assets/logo_page.png
+      const localPath = path.join(__dirname, 'public', 'assets', 'logo_page.png');
+      if (fs.existsSync(localPath)) {
+        const localBuf = fs.readFileSync(localPath);
+        logoDataUri = bufferToDataUri(localBuf, 'image/png');
+        console.log('✅ Usando logo local em public/assets/logo_page.png');
+      } else {
+        logoDataUri = null; // template deve lidar com null (não exibir logo)
+      }
+    }
+
+    // renderizar HTML: passe logoDataUri (ou null)
     const html = await ejs.renderFile(path.join(__dirname, 'views', 'alvara.ejs'), {
       data,
       barcodeDataUri,
-      barcodeText
+      barcodeText,
+      logoDataUri
     });
 
+    // Inicia browser (reuso)
     const browserInstance = await getBrowser();
     const page = await browserInstance.newPage();
 
-    // aumenta timeout de navegação para 120s
-    await page.setContent(html, { waitUntil: 'networkidle0', timeout: 120000 });
+    // Aumenta timeout; evita networkidle0 (que espera conexões externas) — usamos 'load' ou 'domcontentloaded'
+    // como já injetamos imagens como data URIs, network idle não é necessário.
+    await page.setContent(html, { waitUntil: 'domcontentloaded', timeout: 120000 });
+
+    // Espera opcional por pequenos timers (caso o template execute JS)
+    await page.waitForTimeout(200); // curto, só para estabilidade
 
     const pdfBuffer = await page.pdf({
       format: 'A4',
@@ -97,11 +166,14 @@ app.post('/generate', async (req, res) => {
 
     await page.close();
 
+    // sanity check
     if (!pdfBuffer || pdfBuffer.length < 1000) {
-      console.error('⚠️ PDF gerado com tamanho inválido:', pdfBuffer ? pdfBuffer.length : 'null');
+      console.error('⚠️ PDF gerado inválido:', pdfBuffer ? pdfBuffer.length : 'null');
       return res.status(500).send('Erro: PDF gerado inválido.');
     }
+    console.log('✅ PDF gerado com sucesso:', pdfBuffer.length, 'bytes');
 
+    // salva temporário e stream (mesma lógica do v5)
     const tmpFilename = `alvara_${Date.now()}.pdf`;
     const tmpPath = path.join(tmpDir, tmpFilename);
     await writeFile(tmpPath, pdfBuffer, { encoding: 'binary' });
@@ -116,29 +188,30 @@ app.post('/generate', async (req, res) => {
     stream.pipe(res);
 
     stream.on('end', async () => {
-      try { await unlink(tmpPath); } catch { }
+      try { await unlink(tmpPath); } catch (e) { /* ignore */ }
     });
-
     stream.on('error', async (err) => {
-      console.error('Erro no stream de PDF:', err);
-      try { await unlink(tmpPath); } catch { }
+      console.error('Erro no stream do PDF:', err);
+      try { await unlink(tmpPath); } catch (e) { /* ignore */ }
       if (!res.headersSent) res.status(500).send('Erro ao enviar PDF.');
     });
 
   } catch (err) {
     console.error('❌ Erro ao gerar PDF:', err);
-    if (browser && !browser.isConnected()) browser = null; // força reinício
-    res.status(500).send('Erro ao gerar PDF: ' + err.message);
+    // se browser morreu, força reinício
+    if (browser && !browser.isConnected()) browser = null;
+    return res.status(500).send('Erro ao gerar PDF: ' + (err.message || err));
   }
 });
 
-app.get('/', (req, res) => res.render('form', { defaults: {} }));
+// healthcheck
 app.get('/_health', (_req, res) => res.json({ status: 'ok' }));
 
+// start
 const PORT = parseInt(process.env.PORT, 10) || 3000;
-app.listen(PORT, () => console.log(`✅ Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`🚀 Servidor rodando em http://localhost:${PORT} (PORT=${PORT})`));
 
 // encerra browser ao sair
 process.on('exit', async () => {
-  if (browser) await browser.close();
+  if (browser) try { await browser.close(); } catch (e) {}
 });
