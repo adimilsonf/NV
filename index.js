@@ -1,5 +1,5 @@
 /**
- * server.js v5.3 - Alvará Generator (fix: removed page.waitForTimeout -> sleep)
+ * server.js v5.3 - Alvará Generator (fix:removed page.waitForTimeout -> sleep)
  *
  * • Usa puppeteer completo
  * • Converte logo remota para dataURI para evitar timeouts
